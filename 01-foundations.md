@@ -1,8 +1,7 @@
 # System Design Foundations
 
 > **Purpose:** Core concepts that underpin every system design interview.  
-> **Rule:** Every design decision must be justified using one or more of these concepts.  
-> **Format:** Diagrams where spatial relationships matter. Tables and prose elsewhere.
+> **Rule:** Every design decision must be justified using one or more of these concepts.
 
 ---
 
@@ -24,56 +23,51 @@
 
 ## 1. CAP Theorem
 
-A distributed system can guarantee **at most two** of three properties simultaneously:
+A distributed system can guarantee **at most two** of three properties simultaneously.
+
+```
+              Consistency (C)
+              All nodes same data
+                    /\
+                   /  \
+                  /    \
+           CP   /  ???  \  CA
+      HBase    /  (only   \ PostgreSQL
+      etcd    /  single    \ MySQL
+    Zookeeper/   machine)   \(single node)
+             /________________\
+Availability(A)              Partition(P)
+Always responds              Survives network split
+
+        AP
+   Cassandra, DynamoDB
+   CouchDB, DNS
+```
 
 | Property | Meaning |
 |---|---|
 | **C — Consistency** | Every read receives the most recent write or an error. All nodes see the same data at the same time. |
-| **A — Availability** | Every request receives a response (not necessarily the latest data). System is always operational. |
+| **A — Availability** | Every request receives a response — not necessarily the latest data. System is always operational. |
 | **P — Partition tolerance** | System continues operating even when network messages between nodes are dropped or delayed. |
-
-```mermaid
-graph TD
-    CAP((CAP Theorem))
-    C[Consistency\nAll nodes same data]
-    A[Availability\nAlways responds]
-    P[Partition Tolerance\nSurvives network split]
-
-    CAP --- C
-    CAP --- A
-    CAP --- P
-
-    CP[CP Systems\nPostgreSQL, HBase\nZookeeper, etcd]
-    AP[AP Systems\nDynamoDB, Cassandra\nDNS, CouchDB]
-    CA[CA - Impossible\nin distributed systems]
-
-    C & P --> CP
-    A & P --> AP
-    C & A --> CA
-
-    style CA fill:#FCEBEB,stroke:#E24B4A,color:#A32D2D
-    style CP fill:#E6F1FB,stroke:#185FA5,color:#0C447C
-    style AP fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-```
 
 ### The real-world constraint
 
-**Network partitions are not optional** — they will happen in any distributed system. So the real choice is always **CP** or **AP**. CA systems only exist on a single machine.
+**Network partitions are not optional** — they will happen in any distributed system. The real choice is always **CP** or **AP**. CA systems only exist on a single machine.
 
 ### Scenario decision map
 
 | Scenario | Choice | Reason |
 |---|---|---|
 | Bank transfer / payments | **CP** | Stale read = money appears in two accounts simultaneously |
-| DNS resolution | **AP** | Slightly stale IP is far better than no answer |
-| Shopping cart | **AP** | Merge cart conflicts at checkout; don't block the shopping experience |
-| Social media like counter | **AP** | Approximate count is acceptable |
-| Domain availability check | **AP** (check) + **CP** (registration write) | Fast check OK; actual registration must be atomic |
-| Distributed config (etcd) | **CP** | Half the fleet running with an old DB password = catastrophic failure |
+| DNS resolution | **AP** | Slightly stale IP is far better than no answer at all |
+| Shopping cart | **AP** | Merge conflicts at checkout; never block the shopping experience |
+| Social media like counter | **AP** | Approximate count is perfectly acceptable |
+| Domain availability check | **AP** (check) + **CP** (registration) | Fast check OK; actual write must be atomic |
+| Distributed config store (etcd) | **CP** | Half the fleet running old DB credentials = catastrophe |
 
 ### Interview sentence
 
-> "Network partitions aren't optional — they will happen. The real choice is always CP vs AP. I'd choose CP here because a stale read causes [specific harm]. I'd choose AP here because eventual convergence is acceptable because [reason]."
+> "Network partitions will happen — they are not optional. So the real choice is always CP vs AP. I'd choose CP here because a stale read causes [specific harm]. I'd choose AP because eventual convergence is acceptable here because [reason]."
 
 ---
 
@@ -81,15 +75,23 @@ graph TD
 
 CAP only describes behaviour **during a partition**. PACELC also addresses normal operation:
 
-- **If Partition** → choose between **A**vailability and **C**onsistency
-- **Else** (normal operation) → choose between **L**atency and **C**onsistency
+```
+         Network Partition?
+              /       \
+            YES        NO
+            /           \
+    Choose between    Choose between
+    A vs C            L vs C
+    (Availability     (Latency
+    vs Consistency)   vs Consistency)
+```
 
-This matters because even without a partition, replication has a latency cost.
-
-| Category | Systems | Trade-off |
+| Category | Systems | Normal operation trade-off |
 |---|---|---|
-| **PA/EL** — high availability + low latency | DynamoDB, Cassandra, CouchDB | Sacrifice consistency for speed and uptime |
-| **PC/EC** — strong consistency | HBase, Zookeeper, etcd, Spanner | Pay latency for correctness |
+| **PA/EL** | DynamoDB, Cassandra, CouchDB | Sacrifice consistency for low latency |
+| **PC/EC** | HBase, Zookeeper, etcd, Spanner | Pay latency for correctness |
+
+This matters because even without a partition, synchronous replication (strong consistency) adds latency compared to async replication (eventual consistency).
 
 ---
 
@@ -97,35 +99,43 @@ This matters because even without a partition, replication has a latency cost.
 
 From **strongest** to **weakest**:
 
-### Linearizability (strongest)
-All operations appear atomic at a single point in real time. Global ordering matches wall-clock time.  
-**Used by:** etcd, Google Spanner.
+```
+STRONGEST
+    │
+    │  Linearizability  — operations appear atomic at a real-time point
+    │                     (etcd, Google Spanner)
+    │
+    │  Strong           — every read returns the latest write
+    │                     (PostgreSQL sync replication, Zookeeper)
+    │
+    │  Sequential       — all nodes see same order, not necessarily real-time
+    │
+    │  Causal           — causally related ops seen in same order everywhere
+    │                     (MongoDB causal sessions, collaborative editing)
+    │
+    │  Read-your-writes — you always see your own writes
+    │                     (required by virtually all user-facing apps)
+    │
+    │  Eventual         — replicas converge given no new writes
+    │                     (DNS, CDN caches, Cassandra, DynamoDB default)
+    │
+WEAKEST
+```
 
-### Strong consistency
-After a write completes, every subsequent read from any node returns that value. Achieved via single primary or quorum reads.  
-**Used by:** PostgreSQL with synchronous replication, Zookeeper.  
-**When:** financial transactions, inventory counts — anything where stale reads cause real-world harm.
+### Key distinctions for interviews
 
-### Sequential consistency
-All nodes see operations in the same order — but that order need not match wall-clock time.
+**Strong vs Eventual:** strong consistency costs latency — all replicas must agree before returning. Eventual consistency is faster but reads may be stale for milliseconds to seconds.
 
-### Causal consistency
-Causally related operations are seen in the same order everywhere. Independent operations may appear in different orders on different nodes.  
-**Used by:** MongoDB causal sessions, collaborative editing systems.
+**Read-your-writes:** if a user updates their profile picture and immediately sees the old one, the app is broken. This is not just a consistency model — it is a product requirement for any user-facing system.
 
-### Read-your-writes (session consistency)
-A client always sees its own writes immediately after making them, even if other clients may see stale data temporarily.  
-**Required by:** virtually all user-facing web applications.  
-**Implementation:** route same session's reads to same replica, or track write timestamp in session token.
-
-### Eventual consistency (weakest)
-All replicas will converge given no new writes. Reads may return stale data during the convergence window (milliseconds to seconds typically).  
-**Used by:** DNS, CDN caches, DynamoDB default, Cassandra default, social media counters.  
-**Conflict resolution strategies:** LWW (last-write-wins), CRDTs, application-level merge logic.
+**Eventual consistency conflict resolution strategies:**
+- LWW (last-write-wins) — highest timestamp wins. Simple but can lose data.
+- CRDTs (conflict-free replicated data types) — for counters and sets that can merge automatically.
+- Application-level merge — custom logic to reconcile conflicts.
 
 ### Interview one-liner
 
-> "Strong consistency: after a write, every read returns that value — costs latency, all replicas must agree. Eventual consistency: replicas converge over time but reads may be stale — much faster, acceptable when approximate values are fine (like counts, view counts, DNS TTLs)."
+> "Strong consistency: after a write, every read returns that value — costs latency, all replicas must agree. Eventual consistency: replicas converge over time but reads may be stale — much faster, acceptable when approximate values are fine like view counts, like counts, DNS TTLs."
 
 ---
 
@@ -134,130 +144,167 @@ All replicas will converge given no new writes. Reads may return stale data duri
 ### Decision framework
 
 ```
-Need complex JOINs or ACID multi-table transactions?   → SQL (PostgreSQL, MySQL)
-Simple key-value lookups, caching, sessions?           → Key-value (Redis, DynamoDB)
-Flexible/nested schema, variable attributes?           → Document (MongoDB, Firestore)
-Write-heavy, time-ordered, massive horizontal scale?   → Wide-column (Cassandra, HBase)
-Relationship traversal is the core operation?          → Graph (Neo4j, Neptune)
-Time-series metrics, IoT, monitoring?                  → TimescaleDB, InfluxDB
+What is the primary access pattern?
+         │
+         ├─ Complex JOINs, ACID multi-table transactions?
+         │         → SQL (PostgreSQL, MySQL)
+         │
+         ├─ Simple lookup by ID, caching, sessions?
+         │         → Key-value (Redis, DynamoDB)
+         │
+         ├─ Flexible / nested / variable schema?
+         │         → Document (MongoDB, Firestore)
+         │
+         ├─ Write-heavy, time-ordered, massive scale?
+         │         → Wide-column (Cassandra, HBase)
+         │
+         ├─ Relationship traversal is the core query?
+         │         → Graph (Neo4j, Amazon Neptune)
+         │
+         └─ Time-series metrics, IoT, monitoring?
+                   → TimescaleDB, InfluxDB
 ```
 
-### Comparison
+### Comparison table
 
-| Type | Examples | Strengths | Weaknesses | Use for |
+| Type | Examples | Strengths | Weaknesses | Best for |
 |---|---|---|---|---|
-| **SQL** | PostgreSQL, MySQL | ACID, complex queries, rich indexing | Hard to scale writes horizontally | Users, orders, payments |
-| **Key-value** | Redis, DynamoDB | O(1) get/set, extreme throughput | No joins, must know key upfront | Cache, sessions, rate limiting |
-| **Document** | MongoDB, Firestore | Flexible schema, nested data | No native joins, eventual consistency | User profiles, CMS, catalogs |
-| **Wide-column** | Cassandra, HBase | Massive write scale, time-ordered | Query patterns defined upfront, no joins | Logs, activity feeds, IoT |
-| **Graph** | Neo4j, Neptune | Relationship traversal O(edges not rows) | Not general purpose | Social graphs, fraud detection |
+| **SQL** | PostgreSQL, MySQL | ACID, complex queries, rich indexing, mature tooling | Hard to scale writes horizontally, schema migrations | Users, orders, payments, anything needing transactions |
+| **Key-value** | Redis, DynamoDB | O(1) get/set, extreme throughput, built-in scaling | No joins, must know key upfront, limited query flexibility | Cache, sessions, rate limiting counters, feature flags |
+| **Document** | MongoDB, Firestore | Flexible schema (no migrations), nested data natural | No native JOINs, eventual consistency default, data duplication | User profiles, CMS content, product catalogs |
+| **Wide-column** | Cassandra, HBase | Massive horizontal write scale, excellent time-series | Query patterns defined upfront, no JOINs, complex operations | Logs, IoT, activity feeds at Twitter/Instagram scale |
+| **Graph** | Neo4j, Neptune | Relationship traversal O(edges) not O(rows) | Not general purpose, poor aggregation | Social networks, fraud detection, RBAC hierarchies |
+
+### SQL scale pattern (important to know)
+
+```
+Start: Single primary
+  ↓
+Add read replicas (primary + replica ×3)
+  ↓
+Connection pooling (PgBouncer)
+  ↓
+Caching layer (Redis in front of DB)
+  ↓
+Sharding (only when single primary write throughput is genuinely exhausted)
+```
+
+> Premature sharding is one of the most expensive architectural mistakes. SQL scales reads very effectively with replicas.
 
 ### Interview warning
 
-> "The common mistake: 'I'd use MongoDB because NoSQL scales better.' Scale depends on access patterns, not the database type. PostgreSQL with read replicas scales reads very effectively. I choose based on the specific access patterns and consistency requirements."
+> "The common mistake: 'I'd use MongoDB because NoSQL scales better.' Scale depends on access patterns, not the database type. I choose based on the specific access patterns and consistency requirements of this system."
 
 ---
 
 ## 5. Caching Strategies
 
-### Caching layers — mention all in any design
+### Caching layers — always mention all in a design
 
-```mermaid
-graph LR
-    Client[Client\nBrowser cache]
-    CDN[CDN Edge\nStatic assets]
-    GW[API Gateway\nResponse cache]
-    App[Application\nRedis / Memcached]
-    DB[(Database\nQuery cache)]
+```
+Request flow →
 
-    Client --> CDN --> GW --> App --> DB
+ ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+ │  Client  │───▶│   CDN    │───▶│  API GW  │───▶│  Redis   │───▶│   DB     │
+ │ Browser  │    │  Edge    │    │  Cache   │    │Memcached │    │ (source  │
+ │  Cache   │    │ (static) │    │(responses│    │ (app     │    │ of truth)│
+ └──────────┘    └──────────┘    │ per user)│    │  layer)  │    └──────────┘
+                                 └──────────┘    └──────────┘
 
-    style Client fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    style CDN fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    style GW fill:#FAEEDA,stroke:#854F0B,color:#633806
-    style App fill:#E6F1FB,stroke:#185FA5,color:#0C447C
-    style DB fill:#EAF3DE,stroke:#3B6D11,color:#27500A
+Each layer has different TTLs and invalidation strategies.
 ```
 
 ### Cache-aside (lazy loading) — most common
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant Cache
-    participant DB
+```
+READ:
+  App ──get(key)──▶ Cache
+                         miss
+  App ◀──────────────────── Cache
+  App ──read(key)──▶ DB
+  App ◀──data────────── DB
+  App ──set(key,data,TTL)──▶ Cache
+  App ◀──return data to client
 
-    App->>Cache: get(key)
-    Cache-->>App: miss
-    App->>DB: read(key)
-    DB-->>App: data
-    App->>Cache: set(key, data, TTL)
-    App->>Cache: get(key)
-    Cache-->>App: hit → return data
+SUBSEQUENT READ:
+  App ──get(key)──▶ Cache
+  App ◀──data (HIT)── Cache  ← fast path
 ```
 
-✅ Only caches what is actually requested. Cache failure just means slower reads.  
-❌ Cache miss = 3 round trips. Cold start is slow. Stale if DB is updated externally.  
-**Use for:** read-heavy workloads, URL redirects, domain lookups.
+✅ Only caches what is requested. Resilient — cache failure just means slower reads (DB fallback).  
+❌ Cache miss = 3 round trips. Cold start is slow. Stale if DB is updated externally without invalidation.  
+**Use for:** read-heavy workloads, URL redirects, domain lookups, any system where most data is rarely accessed.
 
 ### Write-through — strong consistency
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant Cache
-    participant DB
-
-    App->>Cache: set(key, value)
-    Cache->>DB: write(key, value)
-    DB-->>Cache: OK
-    Cache-->>App: OK
-    Note over Cache,DB: Both written synchronously before returning
+```
+WRITE:
+  App ──write(key, val)──▶ Cache
+  Cache ──write(key, val)──▶ DB     ← both written synchronously
+  DB ◀──OK───────────────── DB
+  Cache ◀──OK──────────────── (both written)
+  App ◀──OK (return to client)
 ```
 
-✅ Cache never stale. Reads always fast after the first write.  
-❌ Write latency doubles (must write both). Cache fills with data that may never be read.  
+✅ Cache never stale. Reads are always fast after the first write.  
+❌ Write latency doubles (cache + DB). Cache fills with data that may never be read.  
 **Use for:** payment state, user balances, anything that must always be fresh on read.
 
-### Write-behind (write-back) — high write throughput
+### Write-behind (write-back) — highest write throughput
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant Cache
-    participant Queue
-    participant DB
+```
+WRITE:
+  App ──write(key, val)──▶ Cache
+  App ◀──OK (immediate response)    ← returns before DB write
 
-    App->>Cache: set(key, value)
-    Cache-->>App: OK (immediate)
-    Cache->>Queue: enqueue write
-    Note over Queue,DB: async — background flush
-    Queue->>DB: write(key, value)
+ASYNC (background):
+  Cache ──flush queue──▶ DB         ← eventual consistency
 ```
 
-✅ Lowest write latency. Absorbs write spikes. Good for counters.  
-❌ Data loss risk if cache fails before flush. Not suitable for ACID requirements.  
-**Use for:** analytics counters, like counts, view counts.
+✅ Lowest write latency. Absorbs write spikes well.  
+❌ Data loss risk if cache crashes before flush. Not for ACID requirements.  
+**Use for:** analytics counters, view counts, like counts, any metric where small data loss is acceptable.
 
 ### Eviction policies
 
-| Policy | When to use |
-|---|---|
-| **LRU** (least recently used) | Default choice. Good when recent access predicts future access. |
-| **LFU** (least frequently used) | Stable popularity patterns. Old trending content evicted. |
-| **TTL** (time to live) | Always combine with other policies. Prevents stale data. |
-| **FIFO / Random** | Use only when access patterns are completely unknown. |
+| Policy | How | When to use |
+|---|---|---|
+| **LRU** (least recently used) | Evict item not accessed for longest time | Default choice. Good when recent = likely future access. |
+| **LFU** (least frequently used) | Evict item accessed fewest times overall | Stable popularity patterns — old trending items evicted. |
+| **TTL** (time to live) | Expire after N seconds regardless of access | Always combine with other policies. Prevents stale data. |
+| **FIFO / Random** | First-in-first-out or random | Use only when access patterns are completely unknown. |
 
-### Asymmetric TTL — a senior detail
+### Asymmetric TTL — a key senior detail
 
-Different states deserve different TTLs based on how quickly they can change:
+Different states change at different rates — match the TTL to the volatility:
 
 ```
-Domain taken     → TTL 1 hour    (rarely becomes available — expiry takes weeks)
-Domain available → TTL 5 min     (can become taken at any moment)
+State              Volatility     TTL recommendation
+─────────────────────────────────────────────────────
+Domain taken       Very low       1 hour   (expiry takes weeks)
+Domain available   High           5 min    (can be taken any moment)
+Video metadata     Low            24 hours
+User presence      High           5 min
+Static assets      None           1 year   (use content-addressed filenames)
+```
 
-Tweet content    → TTL 24 hours  (rarely changes)
-User presence    → TTL 5 min     (changes frequently)
+### Cache stampede (thundering herd) prevention
+
+When a popular entry's TTL expires, many concurrent requests simultaneously miss and hammer the DB.
+
+```
+Solutions:
+
+1. Probabilistic early expiration
+   if (TTL < 5min && random() < 0.1) background_refresh();
+
+2. Distributed lock on miss
+   lock = redis.SETNX("lock:key", 1, EX=5)
+   if lock: fetch from DB, repopulate cache
+   else:    sleep(100ms), retry from cache
+
+3. Stale-while-revalidate
+   Serve stale data immediately, refresh in background
 ```
 
 ---
@@ -266,38 +313,23 @@ User presence    → TTL 5 min     (changes frequently)
 
 ### L4 vs L7
 
-```mermaid
-graph TD
-    subgraph L4["L4 — Transport Layer"]
-        L4LB[L4 Load Balancer\nRoutes on IP + Port]
-        S1[Server 1]
-        S2[Server 2]
-        S3[Server 3]
-        L4LB --> S1
-        L4LB --> S2
-        L4LB --> S3
-    end
-
-    subgraph L7["L7 — Application Layer"]
-        L7LB[L7 Load Balancer\nRoutes on URL path / headers / cookies]
-        API[/api/* → API Service]
-        Static[/static/* → CDN]
-        WS[WebSocket → WS Service]
-        L7LB --> API
-        L7LB --> Static
-        L7LB --> WS
-    end
-
-    style L4 fill:#E6F1FB,stroke:#185FA5
-    style L7 fill:#EAF3DE,stroke:#3B6D11
 ```
+L4 — Transport Layer                L7 — Application Layer
+────────────────────────────        ────────────────────────────────────
+Routes on: IP + TCP/UDP port        Routes on: HTTP headers, URL, cookies
 
-| | L4 (Transport) | L7 (Application) |
-|---|---|---|
-| **Routes on** | IP + TCP/UDP port | HTTP headers, URL path, cookies, content type |
-| **Speed** | Faster — no packet inspection | Slower — full packet inspection |
-| **Features** | Raw routing | SSL termination, path routing, A/B testing, request rewriting |
-| **Use for** | Non-HTTP protocols, raw TCP/UDP | Microservices, HTTP APIs |
+Client                              Client
+  │                                   │
+  ▼                                   ▼
+L4 LB                               L7 LB
+  ├──▶ Server 1 (TCP)                 ├──▶ /api/*      → API Service
+  ├──▶ Server 2 (TCP)                 ├──▶ /static/*   → CDN / Object Store
+  └──▶ Server 3 (TCP)                 └──▶ WebSocket   → WS Service
+
+Faster (no packet inspection)       Slower but smarter
+Good for: raw TCP, UDP, gaming      Good for: microservices, HTTP APIs,
+                                    SSL termination, A/B testing
+```
 
 ### Balancing algorithms
 
@@ -305,87 +337,131 @@ graph TD
 |---|---|---|
 | **Round robin** | Rotate through servers in order | Identical servers, simple default |
 | **Weighted round robin** | Higher-capacity servers get proportionally more | Heterogeneous fleets |
-| **Least connections** | New request → server with fewest active connections | Variable-duration requests (WebSocket, streaming) |
-| **IP hash / sticky** | Same client IP → same server every time | Session state not shared across servers |
-| **Power of two choices** | Pick 2 servers randomly, send to the less busy one | Near-optimal, very simple to implement |
+| **Least connections** | Route to server with fewest active connections | Variable-duration requests (WebSocket, video streaming) |
+| **IP hash / sticky** | Same client IP → same server always | Session state not shared across servers |
+| **Power of two choices** | Pick 2 servers randomly, route to less busy one | Near-optimal performance, very simple to implement |
 
-### Health checks
+### Health checks and zero-downtime deploys
 
-Load balancer continuously pings `/health` endpoint on each backend. Fail N consecutive checks → remove from rotation. Healthy again → re-add. This is the mechanism behind zero-downtime deploys — drain the old instance, bring up the new one.
+```
+Load balancer pings /health every N seconds
+  ├─ Fail N consecutive checks → remove from rotation
+  ├─ Pass checks again         → re-add to rotation
+  └─ Zero-downtime deploy:
+       1. Remove old instance from LB rotation
+       2. Wait for in-flight requests to drain
+       3. Bring up new instance
+       4. Add new instance to LB rotation
+       5. Terminate old instance
+```
 
 ---
 
 ## 7. Message Queues
 
-### When to use a queue
+### Core topology
 
-```mermaid
-graph LR
-    Producer[Producer\nDomain registration] -->|publish| Queue[(Message Queue\nKafka / RabbitMQ)]
-    Queue -->|consume| C1[Email service]
-    Queue -->|consume| C2[Analytics service]
-    Queue -->|consume| C3[Audit log service]
-    Queue -->|consume| DLQ[Dead letter queue\nFailed messages]
-
-    style Queue fill:#E6F1FB,stroke:#185FA5,color:#0C447C
-    style DLQ fill:#FCEBEB,stroke:#E24B4A,color:#A32D2D
 ```
+                   ┌─────────────────────────────┐
+                   │      Message Broker          │
+                   │   (Kafka / RabbitMQ / SQS)   │
+                   │                              │
+Producer ─publish─▶│  [msg1][msg2][msg3][msg4]   │─consume─▶ Consumer A
+                   │                              │─consume─▶ Consumer B
+                   │  Dead Letter Queue (DLQ)     │─consume─▶ Consumer C
+                   │  [failed-msg1][failed-msg2]  │
+                   └─────────────────────────────┘
+```
+
+### When to use a queue
 
 | Scenario | Why a queue helps |
 |---|---|
-| **Async processing** | Return immediately, process in background (video transcoding, email sending) |
-| **Load levelling** | Absorb traffic spikes; workers drain at a steady rate |
-| **Fan-out** | One event triggers multiple independent consumers |
-| **Fault tolerance** | Consumer down → messages queue up, process when it recovers |
-| **Decoupling** | Producer doesn't need to know about consumers |
+| **Async processing** | Return 200 OK immediately; transcode video / send email in background |
+| **Load levelling** | Absorb traffic spikes; workers drain at steady rate regardless of burst |
+| **Fan-out** | One "user registered" event → email service + analytics + profile creator each consume independently |
+| **Fault tolerance** | Email service goes down → messages queue up, delivered when it recovers |
+| **Decoupling** | Producer doesn't need to know how many consumers exist or what they do |
 
 ### Kafka vs RabbitMQ
 
-| | Kafka | RabbitMQ |
-|---|---|---|
-| **Model** | Immutable append-only log | Traditional queue (message deleted after ACK) |
-| **Retention** | Days / weeks (configurable) | Until acknowledged |
-| **Consumer model** | Consumer groups — each reads independently | Competing consumers — one processes each message |
-| **Throughput** | Millions of messages/sec | Thousands of messages/sec |
-| **Best for** | Event sourcing, analytics pipelines, audit logs, high throughput | Task queues, RPC-style jobs, notifications, simpler setup |
+```
+Kafka                                RabbitMQ
+─────────────────────────────────    ─────────────────────────────────
+Model: immutable append-only log     Model: traditional queue
+Messages: retained for days/weeks    Messages: deleted after ACK
+Consumers: consumer groups, each     Consumers: competing — one processes
+           reads independently                  each message
+Throughput: millions/sec             Throughput: thousands/sec
+
+Best for:                            Best for:
+  Event sourcing                       Task queues
+  Analytics pipelines                  RPC-style jobs
+  Audit logs                           Notifications
+  High-throughput event streaming      Simpler setup needs
+```
 
 ### Delivery guarantees
 
 | Guarantee | Behaviour | Use for |
 |---|---|---|
-| **At-most-once** | 0 or 1 deliveries — may be lost | Metrics where losing occasional events is acceptable |
-| **At-least-once** | 1 or more deliveries — may duplicate | Most cases — consumer must be idempotent |
+| **At-most-once** | 0 or 1 deliveries — may be lost | Metrics where losing a few is acceptable |
+| **At-least-once** | 1+ deliveries — may duplicate | Most cases — consumer must be idempotent |
 | **Exactly-once** | Delivered exactly once | Payments, financial transactions |
 
-**Dead letter queue (DLQ):** messages that fail to process after N retries are moved here. Prevents one bad message from blocking the entire queue forever. Always configure a DLQ in production.
+**Dead letter queue:** messages that fail after N retries → DLQ. Prevents one bad message from blocking the whole queue forever. Always configure a DLQ in production.
 
 ---
 
 ## 8. CDN
 
-### How a CDN works
+### How it works
+
+```
+User (Mumbai) ─────▶ DNS resolves to nearest edge node
+                              │
+                         CDN Edge (Mumbai)
+                              │
+                    ┌─────────┴──────────┐
+                    │                    │
+               Cache HIT            Cache MISS
+               (~5-20ms)                │
+               Return content      Fetch from Origin
+                                   (London / US East)
+                                   Cache for future requests
+                                   (~100-300ms first user in region)
+                                         │
+                              All subsequent users in Mumbai
+                              get cache hit (~5-20ms)
+```
+
+### Cache-Control headers
+
+```http
+Cache-Control: max-age=31536000, immutable    # versioned static assets (JS/CSS bundles)
+Cache-Control: max-age=3600                   # semi-static (updated hourly)
+Cache-Control: no-cache                       # revalidate before serving
+Cache-Control: no-store                       # never cache (private, personalised)
+```
+
+### CDN request/response flow (Mermaid — for environments that render it)
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant DNS
-    participant Edge as CDN Edge Node\n(nearest to user)
-    participant Origin as Origin Server
+    participant U as User (Mumbai)
+    participant E as CDN Edge (Mumbai)
+    participant O as Origin Server
 
-    User->>DNS: resolve cdn.example.com
-    DNS-->>User: IP of nearest edge node
-
-    User->>Edge: GET /video/segment.ts
+    U->>E: GET /assets/logo.png
     alt Cache hit
-        Edge-->>User: 200 OK (~5-20ms)
-    else Cache miss
-        Edge->>Origin: GET /video/segment.ts
-        Origin-->>Edge: 200 OK + content
-        Edge->>Edge: cache for future requests
-        Edge-->>User: 200 OK (~100-300ms first time)
+        E-->>U: 200 OK · ~10ms
+    else Cache miss (first user in region)
+        E->>O: GET /assets/logo.png
+        O-->>E: 200 OK + content
+        E->>E: cache (TTL from Cache-Control)
+        E-->>U: 200 OK · ~200ms
+        Note over E: All future users in this region get cache hit
     end
-
-    Note over Edge: All future users in this region\nget cache hit (~5-20ms)
 ```
 
 ### Pull CDN vs Push CDN
@@ -393,75 +469,98 @@ sequenceDiagram
 | | Pull CDN | Push CDN |
 |---|---|---|
 | **Mechanism** | Edge fetches from origin on first cache miss | You proactively push content to edge nodes |
-| **Setup** | Zero configuration | Must manage what content to push |
-| **First request latency** | Slightly slower (origin fetch) | Instant — already at edge |
-| **Best for** | Unpredictable access patterns, most use cases | Large predictable files (software releases, known viral content) |
+| **Setup** | Zero configuration | Must manage which content to push and when |
+| **First request** | Slightly slower (origin fetch) | Instant — already at edge |
+| **Best for** | Unpredictable access patterns, most use cases | Large files with predictable high traffic (software releases, known viral videos) |
 
-### Cache-Control headers for CDN
+### When CDN is the architecture, not an optimisation
 
-```http
-Cache-Control: max-age=31536000, immutable    # static assets with versioned filenames
-Cache-Control: max-age=3600                   # semi-static content (updated hourly)
-Cache-Control: no-cache                       # must revalidate before serving
-Cache-Control: no-store                       # never cache (private, personalised)
-```
-
-### When CDN is the architecture (not just an optimisation)
-
-At YouTube's scale (46 Tbps) or Twitter's media scale, no origin cluster can serve the bandwidth. The CDN is not an add-on — it IS the read architecture. Origin only handles cache misses and new content ingestion.
+At YouTube's scale (46 Tbps of video) or any globally distributed read-heavy system, no origin cluster can serve the bandwidth. The CDN is the read architecture. Origin handles only cache misses and new content ingestion.
 
 ---
 
 ## 9. DNS Internals
 
-### The resolution chain
+### The 6-step resolution chain
+
+```
+User types example.com
+
+Step 1: Browser DNS cache
+        HIT → use cached IP, done
+        ↓ miss
+
+Step 2: OS resolver + /etc/hosts
+        HIT → use cached IP, done
+        ↓ miss
+
+Step 3: Recursive resolver (ISP's DNS / 8.8.8.8)
+        Caches and proxies on your behalf
+        ↓
+
+Step 4: Root nameservers (13 clusters worldwide)
+        "Who handles .com?" → Verisign nameservers
+        ↓
+
+Step 5: TLD nameserver (Verisign for .com)
+        "Who handles example.com?" → ns1.example.com
+        ↓
+
+Step 6: Authoritative nameserver (ns1.example.com)
+        "What is example.com's IP?" → 93.184.216.34, TTL 3600
+        ↓
+
+Recursive resolver caches result for TTL (3600 sec = 1 hour)
+Returns IP to browser
+```
+
+### DNS resolution sequence (Mermaid — for environments that render it)
 
 ```mermaid
 sequenceDiagram
-    participant Browser
-    participant OS as OS / hosts file
-    participant Resolver as Recursive Resolver\n(ISP / 8.8.8.8)
-    participant Root as Root Nameserver\n(13 clusters)
-    participant TLD as TLD Nameserver\n(Verisign for .com)
-    participant Auth as Authoritative NS\n(example.com's DNS)
+    participant B as Browser
+    participant R as Recursive Resolver
+    participant Root as Root NS
+    participant TLD as TLD NS (Verisign)
+    participant Auth as Authoritative NS
 
-    Browser->>OS: resolve example.com
-    OS-->>Browser: cache hit? Return IP
-
-    Browser->>Resolver: resolve example.com
-    Resolver->>Root: who handles .com?
-    Root-->>Resolver: Verisign nameservers
-
-    Resolver->>TLD: who handles example.com?
-    TLD-->>Resolver: ns1.example.com
-
-    Resolver->>Auth: what is example.com's IP?
-    Auth-->>Resolver: 93.184.216.34 (TTL: 3600)
-
-    Resolver-->>Browser: 93.184.216.34
-    Note over Resolver: Caches result for TTL duration
+    B->>R: resolve example.com
+    R->>Root: who handles .com?
+    Root-->>R: Verisign nameservers
+    R->>TLD: who handles example.com?
+    TLD-->>R: ns1.example.com
+    R->>Auth: what is example.com's IP?
+    Auth-->>R: 93.184.216.34 (TTL: 3600)
+    R-->>B: 93.184.216.34
+    Note over R: Caches for 3600 seconds
 ```
 
-### DNS Record Types
+### DNS record types
 
 | Record | Maps | Example |
 |---|---|---|
-| **A** | hostname → IPv4 address | `example.com → 93.184.216.34` |
-| **AAAA** | hostname → IPv6 address | Same for IPv6 |
+| **A** | hostname → IPv4 | `example.com → 93.184.216.34` |
+| **AAAA** | hostname → IPv6 | Same for IPv6 |
 | **CNAME** | hostname → hostname (alias) | `www.example.com → example.com` |
-| **MX** | domain → mail server hostname | Routes incoming email |
-| **NS** | domain → authoritative nameserver | Which server is authoritative |
-| **TXT** | domain → arbitrary text | SPF, DKIM, domain ownership verification |
+| **MX** | domain → mail server hostname | Routes incoming email to correct server |
+| **NS** | domain → authoritative nameserver name | Which DNS server is authoritative |
+| **TXT** | domain → arbitrary text | SPF records, DKIM, domain verification |
 
-### TTL and propagation
+### TTL management
 
-Lower TTL = faster change propagation but more queries to the authoritative server.
+```
+Low TTL (e.g. 300 sec):   Changes propagate quickly   ←→   More DNS queries to auth server
+High TTL (e.g. 86400 sec): Fewer auth server queries  ←→   Changes take a day to propagate
 
-**Best practice for DNS changes:** lower TTL to 300s (5 min) 24 hours before a planned change, make the change, then restore the original TTL. This minimises the propagation window.
+Best practice for planned DNS changes:
+  T-24h: lower TTL to 300 seconds
+  T-0:   make the DNS change
+  T+1h:  restore original TTL (e.g. 3600)
+```
 
-### CNAME at root domain — illegal per DNS spec
+### CNAME at root domain — not permitted
 
-A CNAME at the naked domain (apex record) is not permitted — the root must be an A record. This is why AWS Route 53 has ALIAS records and Cloudflare has CNAME flattening — they resolve the indirection server-side and return an A record.
+A CNAME at the naked domain (apex record, e.g. `example.com`) is illegal per DNS spec — the root must be an A record. Solutions: AWS Route 53 ALIAS records, Cloudflare CNAME flattening — they resolve the indirection server-side and return an A record to the client.
 
 ---
 
@@ -469,65 +568,63 @@ A CNAME at the naked domain (apex record) is not permitted — the root must be 
 
 ### Replication — scale reads
 
-```mermaid
-graph TD
-    W[Write request] --> P[(Primary)]
-    R1[Read request] --> Re1[(Replica 1)]
-    R2[Read request] --> Re2[(Replica 2)]
-    R3[Read request] --> Re3[(Replica 3)]
+```
+         Writes only                Reads distributed
+              │                     │        │        │
+              ▼                     ▼        ▼        ▼
+        ┌──────────┐          ┌─────────┐ ┌─────────┐ ┌─────────┐
+        │ Primary  │──async──▶│Replica 1│ │Replica 2│ │Replica 3│
+        │          │──repl.──▶│         │ │         │ │         │
+        └──────────┘          └─────────┘ └─────────┘ └─────────┘
 
-    P -->|async replication| Re1
-    P -->|async replication| Re2
-    P -->|async replication| Re3
-
-    style P fill:#E6F1FB,stroke:#185FA5,color:#0C447C
-    style Re1 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-    style Re2 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-    style Re3 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
+Scale reads by adding replicas.
+Writes remain a single-primary bottleneck.
+Replication lag = reads may be slightly stale (eventually consistent).
 ```
 
-**Primary-replica:** one primary handles all writes, multiple replicas handle reads. Replication is async — reads may be slightly stale.  
-✅ Scale read throughput linearly by adding replicas.  
-❌ Write bottleneck remains — single primary.
-
-**Multi-primary:** multiple primaries accept writes. Requires conflict resolution strategy.  
-✅ High write throughput, multi-region active-active.  
-❌ Conflict resolution complexity. Use only when single-primary write throughput is genuinely exhausted.
+**Primary-replica:** one primary handles all writes, replicas handle reads.  
+**Multi-primary:** multiple primaries accept writes — conflict resolution required.  
+Use multi-primary only when single-primary write throughput is genuinely exhausted.
 
 ### Sharding — scale writes
 
-```mermaid
-graph TD
-    App[Application] --> SR[Shard Router]
-    SR -->|user_id 0-33%| S1[(Shard 1)]
-    SR -->|user_id 33-66%| S2[(Shard 2)]
-    SR -->|user_id 66-100%| S3[(Shard 3)]
-
-    style SR fill:#FAEEDA,stroke:#854F0B,color:#633806
-    style S1 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-    style S2 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-    style S3 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
 ```
-
-Splits data across multiple database instances. Each shard owns a partition of the data and handles reads/writes for that partition only.
+         Application
+              │
+              ▼
+       ┌─────────────┐
+       │ Shard Router│  (determines which shard owns this key)
+       └──────┬──────┘
+              │
+    ┌─────────┼─────────┐
+    ▼         ▼         ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│Shard 1│ │Shard 2│ │Shard 3│
+│user   │ │user   │ │user   │
+│id 0-  │ │id 34- │ │id 67- │
+│33%    │ │66%    │ │100%   │
+└───────┘ └───────┘ └───────┘
+```
 
 | Strategy | How | Pros | Cons |
 |---|---|---|---|
 | **Hash sharding** | `shard = hash(key) % N` | Uniform distribution | No range queries across shards |
-| **Range sharding** | A-M → shard 1, N-Z → shard 2 | Range queries work naturally | Hot shards if distribution is uneven |
-| **Directory sharding** | Lookup table maps key → shard | Most flexible, supports any distribution | Extra hop adds latency |
-| **Consistent hashing** | Virtual nodes on a ring | Adding/removing shards remaps only a fraction of keys | More complex to implement |
+| **Range sharding** | A-M → shard 1, N-Z → shard 2 | Range queries work naturally | Hot shards if distribution uneven |
+| **Directory sharding** | Lookup table: key → shard | Most flexible | Extra lookup hop adds latency |
+| **Consistent hashing** | Virtual nodes on a ring | Adding/removing shards remaps only a fraction of keys | More complex implementation |
 
 ### Sharding trade-offs — always mention these
 
-- Cross-shard queries require scatter-gather — expensive
-- JOINs across shards are nearly impossible — must denormalise or avoid
-- Re-sharding is painful — design the shard key for future growth from day one
-- Hotspot problem — one popular user routes all traffic to a single shard regardless of hash function
+```
+Cross-shard queries:   scatter-gather — expensive, avoid by design
+JOINs across shards:   nearly impossible — must denormalise data
+Re-sharding:           painful — design shard key for 10× growth from day one
+Hotspot problem:       popular user routes all traffic to one shard despite hash
+```
 
 ### The senior recommendation
 
-> "I'd start with a single primary and read replicas. Only add sharding when a single primary cannot handle write throughput — which happens much later than most people think. Premature sharding is one of the most expensive architectural mistakes in distributed systems."
+> "Start with a single primary and read replicas. Only add sharding when a single primary cannot handle write throughput — which happens much later than most people think. Premature sharding is one of the most expensive architectural mistakes in distributed systems."
 
 ---
 
@@ -535,66 +632,66 @@ Splits data across multiple database instances. Each shard owns a partition of t
 
 Apply this structure to every question. 45-60 minutes total.
 
-### Step 1 — Requirements clarification (5 min)
-
-Always ask before touching the whiteboard:
+### The six steps
 
 ```
-Functional:     What features must the system have? Top 3-4 only.
-Non-functional: Scale (DAU, QPS), latency SLAs, availability (99.9% vs 99.99%),
-                durability, consistency model
-Out of scope:   What can I explicitly ignore? State it.
+┌─────────────────────────────────────────────────────────┐
+│  Step 1 — Requirements clarification          (5 min)   │
+│                                                         │
+│  Functional:     Top 3-4 features only                  │
+│  Non-functional: Scale (DAU, QPS), latency SLAs,        │
+│                  availability (99.9% vs 99.99%),        │
+│                  consistency requirements               │
+│  Out of scope:   State explicitly what you'll ignore    │
+├─────────────────────────────────────────────────────────┤
+│  Step 2 — Capacity estimation                 (5 min)   │
+│                                                         │
+│  QPS       = requests/day ÷ 86,400                      │
+│  Peak      = baseline × 3-10                            │
+│  Storage   = records/day × avg_size × 365               │
+│  Bandwidth = QPS × avg_response_size                    │
+│  Cache     = total_data × 0.20 (hot 20% = 80% traffic) │
+│                                                         │
+│  Always show the arithmetic. Interviewers want to see   │
+│  structured numerical reasoning.                        │
+├─────────────────────────────────────────────────────────┤
+│  Step 3 — High-level design                   (10 min)  │
+│                                                         │
+│  Draw the boxes: clients → LB → services → DB → cache  │
+│  Walk the happy path end-to-end                         │
+│  Separate read path and write path explicitly           │
+├─────────────────────────────────────────────────────────┤
+│  Step 4 — Component deep-dive                 (15 min)  │
+│                                                         │
+│  Pick 2-3 most complex components                       │
+│  For each: schema, API, key algorithm, data structure   │
+│  This is where LLD appears within HLD                   │
+├─────────────────────────────────────────────────────────┤
+│  Step 5 — Scale and reliability               (10 min)  │
+│                                                         │
+│  Identify bottlenecks at 10× current scale             │
+│  DB: replicas for reads, sharding for writes            │
+│  Cache: eviction strategy, stampede prevention          │
+│  Services: horizontal scaling, circuit breakers         │
+│  Network: CDN for static, rate limiting for abuse       │
+├─────────────────────────────────────────────────────────┤
+│  Step 6 — Trade-offs                          (5 min)   │
+│                                                         │
+│  "I chose X over Y because [reason].                    │
+│   The trade-off is [what I give up],                    │
+│   which is acceptable because [why]."                   │
+└─────────────────────────────────────────────────────────┘
 ```
-
-### Step 2 — Capacity estimation (5 min)
-
-Always show the math. Interviewers want to see structured numerical reasoning.
-
-```
-QPS:        requests/day ÷ 86,400 = baseline QPS
-            Peak = 3-10× baseline
-
-Storage:    records/day × avg_record_size × 365 = annual storage
-
-Bandwidth:  QPS × avg_response_size = outbound bandwidth
-
-Cache size: total_data × hot_data_fraction (usually 20%) = cache needed
-```
-
-### Step 3 — High-level design (10 min)
-
-Draw the boxes: clients → load balancer → services → databases → caches.  
-Walk through the happy path end-to-end.  
-Identify the primary read path and write path separately.
-
-### Step 4 — Component deep-dive (15 min)
-
-Pick the 2-3 most complex components. For each: schema, API design, key algorithm, data structure choices. This is where LLD appears within HLD.
-
-### Step 5 — Scale and reliability (10 min)
-
-Identify bottlenecks at 10× current scale. For each component:
-- How does it fail? What is the blast radius?
-- DB: replicas for reads, sharding for writes
-- Cache: eviction strategy, stampede prevention
-- Services: horizontal scaling, circuit breakers, graceful degradation
-- Network: CDN for static, rate limiting for abuse prevention
-
-### Step 6 — Trade-offs (5 min)
-
-Every major decision has a trade-off. State it explicitly:
-
-> "I chose X over Y because [specific reason]. The trade-off is [what I give up], which is acceptable in this context because [why]."
 
 ### Senior differentiators checklist
 
 - [ ] Ask clarifying questions before drawing anything
-- [ ] State the data structure choice before writing code
+- [ ] State data structure choice before writing code
 - [ ] Mention distributed/multi-instance implications proactively
 - [ ] Use correct HTTP semantics (410 vs 404, 429 vs 503, 302 vs 301)
 - [ ] Mention idempotency for all write operations
 - [ ] State when eventual consistency is the right answer and justify it
 - [ ] Name the trade-off for every major design decision
-- [ ] Mention the failure mode for every component
+- [ ] Name the failure mode for every component
 
 ---
